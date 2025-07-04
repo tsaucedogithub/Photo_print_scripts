@@ -117,6 +117,8 @@ def suggest_stretcher_frames(
             continue
 
         pct_area_delta = (bar_w * bar_h - req_area) / req_area * 100
+        # Note: when ranking frames we weight wrap‑around (negative Δ)
+        # one‑third as heavily as oversize area, per user preference.
 
         heavy_cost = None
         std_cost   = None
@@ -134,39 +136,62 @@ def suggest_stretcher_frames(
             (bar_w, bar_h, dpi_x, dpi_y, pct_area_delta, heavy_cost, std_cost)
         )
 
-    # Order by smallest absolute area difference
-    candidates.sort(key=lambda x: abs(x[4]))
+    # Prefer wrap‑around (negative Δ) by a 3:1 ratio:
+    # 1 % wrap is treated like 0.33 % oversize when ranking.
+    candidates.sort(
+        key=lambda x: (abs(x[4]) / 3) if x[4] < 0 else abs(x[4])
+    )
     return candidates[:max_suggestions]
 
 
 if __name__ == "__main__":
-    # Example usage – choose ONE of the following ways to drive the function
-    example_px_width  = 4000
-    example_px_height = 2670
+    """
+    Quick demo — fill **exactly one** of the three target variables below
+    and leave the other two as None.
+    """
+    example_px_width  = 3549
+    example_px_height = 4096
 
-    # (A) Specify nominal DPI directly
-    # target_dpi  = 200
-    # suggestions = suggest_stretcher_frames(example_px_width, example_px_height, target_dpi=target_dpi)
+    # ---- CHOOSE ONE TARGET ------------------------------------------------
+    target_dpi       = None   # e.g. 180
+    target_width_in  = 25     # e.g. 20 for 20‑inch width
+    target_height_in = None   # e.g. 15 for 15‑inch height
+    # ----------------------------------------------------------------------
 
-    # (B) Specify a desired width in inches
-    target_width_in = 20
-    suggestions = suggest_stretcher_frames(example_px_width, example_px_height, target_width_in=target_width_in)
+    suggestions = suggest_stretcher_frames(
+        example_px_width,
+        example_px_height,
+        target_dpi=target_dpi,
+        target_width_in=target_width_in,
+        target_height_in=target_height_in,
+    )
+
+    # ---- Friendly header ---------------------------------------------------
+    if target_dpi is not None:
+        target_desc = f"{target_dpi} DPI (±15 %)"
+    elif target_width_in is not None:
+        target_desc = f'{target_width_in}" wide'
+    else:
+        target_desc = f'{target_height_in}" tall'
 
     print(
-        f"Image: {example_px_width:,} × {example_px_height:,} px  |  "
-        f'Target: {target_width_in}" wide ({suggestions[0][2]:.0f} DPI approx)'
+        f"Image: {example_px_width:,} × {example_px_height:,} px  |  Target: {target_desc}"
     )
     print("Top stretcher‑bar suggestions:")
 
     for w, h, dpi_x, dpi_y, pct, heavy_cost, std_cost in suggestions:
         delta_label = "wrap" if pct < 0 else "Δarea"
-        price_info = ""
+        price_parts = []
         if heavy_cost is not None:
-            price_info += f" | Heavy: ${heavy_cost:.2f}"
+            price_parts.append(f"Heavy ${heavy_cost:.2f}")
         if std_cost is not None:
-            price_info += f" | Std: ${std_cost:.2f}"
+            price_parts.append(f"Std ${std_cost:.2f}")
+        price_info = " | ".join(price_parts)
+        if price_info:
+            price_info = " | " + price_info
+
         print(
             f"  •  {w}\" × {h}\"  →  "
             f"DPIₓ ≈ {dpi_x:.0f}, DPIᵧ ≈ {dpi_y:.0f}  "
-            f"({delta_label} {abs(pct):.1f}% area){price_info}"
+            f"({delta_label} {abs(pct):.1f} %){price_info}"
         )
