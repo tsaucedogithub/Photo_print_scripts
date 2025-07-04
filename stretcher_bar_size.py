@@ -231,10 +231,14 @@ def suggest_stretcher_frames(
              print_w, print_h, final_total)
         )
 
-    # Prefer wrap‑around (negative Δ) by a 3:1 ratio:
-    # 1 % wrap is treated like 0.33 % oversize when ranking.
+    # Rank by (1) how closely the frame’s aspect ratio matches the image,
+    # then (2) the existing area‑delta rule that favors slight wrap‑around.
+    aspect_ratio = img_width_px / img_height_px
     candidates.sort(
-        key=lambda x: (abs(x[4]) / 3) if x[4] < 0 else abs(x[4])
+        key=lambda x: (
+            abs((x[0] / x[1]) - aspect_ratio),           # aspect‑ratio distance
+            (abs(x[4]) / 3) if x[4] < 0 else abs(x[4])   # area delta (existing weighting)
+        )
     )
     return candidates[:max_suggestions]
 
@@ -317,7 +321,7 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Simple CLI demo: edit the values below and re‑run the script.
     # ------------------------------------------------------------------
-    example_px_width  = 3549
+    example_px_width  = 3305
     example_px_height = 4096
 
     # Exactly ONE of the following three targets should be non‑None.
@@ -325,6 +329,6 @@ if __name__ == "__main__":
         example_px_width,
         example_px_height,
         target_dpi=None,
-        target_width_in=25,
-        target_height_in=None,
+        target_width_in=None,
+        target_height_in=39,
     )
