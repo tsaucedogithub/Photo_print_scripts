@@ -108,6 +108,54 @@ def _print_prices(width_in: float, height_in: float) -> Tuple[
     return tbl_price, model_price, tbl_size
 
 
+
+# ---- Fan‑scan helpers -------------------------------------------------
+def _nearest_sizes(x: float, fan: int = 2) -> List[int]:
+    """
+    Return up to `2*fan` stretcher sizes surrounding `x`, rounded to the
+    nearest whole inch, taken from the global _STRETCHER_SIZES list.
+    Always returned in ascending order with duplicates removed.
+    """
+    x_round = round(x)
+    below = [s for s in _STRETCHER_SIZES if s <= x_round]
+    above = [s for s in _STRETCHER_SIZES if s >= x_round]
+    picks = below[-fan:] + above[:fan]
+    # Ensure uniqueness & ordering
+    return sorted(dict.fromkeys(picks))
+
+
+def _fan_candidates(
+    img_w_px: int,
+    img_h_px: int,
+    *,
+    target_width_in: Optional[Number] = None,
+    target_height_in: Optional[Number] = None,
+    fan: int = 2,
+) -> List[Tuple[int, int]]:
+    """
+    Generate a small neighbourhood (“fan”) of (w,h) bar sizes that preserve
+    the image’s aspect ratio as closely as possible around the *fixed* side
+    specified by the user.
+    """
+    ar = img_w_px / img_h_px
+
+    if target_width_in is not None:
+        w_fixed = int(round(target_width_in))
+        h_ideal = w_fixed / ar
+        heights = _nearest_sizes(h_ideal, fan)
+        widths  = [w_fixed]
+    elif target_height_in is not None:
+        h_fixed = int(round(target_height_in))
+        w_ideal = h_fixed * ar
+        widths  = _nearest_sizes(w_ideal, fan)
+        heights = [h_fixed]
+    else:
+        raise ValueError("fan‑scan requires either target_width_in or target_height_in")
+
+    # Cartesian product of the candidate lists
+    return [(w, h) for w in widths for h in heights]
+
+
 def _bar_price(length: int, heavy: bool) -> Optional[float]:
     table = HEAVY_PRICES if heavy else STANDARD_PRICES
     return table.get(length)
@@ -117,12 +165,13 @@ def suggest_stretcher_frames(
     img_width_px: int,
     img_height_px: int,
     *,
-    # Exactly one of the following three inputs must be supplied
     target_dpi: Optional[Number] = None,
     target_width_in: Optional[Number] = None,
     target_height_in: Optional[Number] = None,
     tolerance_pct: float = 15.0,
     max_suggestions: int = 12,
+    use_fan: bool = False,
+    fan_span: int = 2,
 ) -> List[Tuple[
         int, int, float, float, float,         # bars, dpi, Δ
         Optional[float], Optional[float],      # heavy, std bar $
@@ -142,6 +191,13 @@ def suggest_stretcher_frames(
 
     Candidates are ranked by **smallest absolute percentage area difference** versus nominal size. Negative Δ means the printed image will wrap around; positive Δ means it will be enlarged slightly.
 
+    If `use_fan=True`, the search space is restricted to a “fan” of
+    candidate bars surrounding the user‑fixed side.  The width of that
+    neighbourhood is controlled by `fan_span` (± inches).  When the fan
+    yields fewer than `max_suggestions` viable frames, the function
+    automatically back‑fills from the brute‑force pool so you never see an
+    empty list.
+
     Returns:
         List of tuples:
             (frame_w_in, frame_h_in, dpi_x, dpi_y, pct_area_delta,
@@ -155,6 +211,10 @@ def suggest_stretcher_frames(
         and the total cost (print + flat shipping).
     """
     # ---- Input validation & implied DPI -------------------------------
+    # Keep the user‑specified physical dimension (if any) before we overwrite
+    # target_dpi below; we’ll need these values for fan‑scan later.
+    fixed_target_width  = target_width_in
+    fixed_target_height = target_height_in
     dpi_inputs = [target_dpi is not None, target_width_in is not None, target_height_in is not None]
     if sum(dpi_inputs) != 1:
         raise ValueError("Specify exactly ONE of target_dpi, target_width_in, or target_height_in")
@@ -178,8 +238,20 @@ def suggest_stretcher_frames(
     req_h_in = img_height_px / target_dpi
     req_area = req_w_in * req_h_in
 
+    # ---- Build candidate frame list (fan or brute‑force) --------------
+    if use_fan:
+        candidate_frames = _fan_candidates(
+            img_width_px,
+            img_height_px,
+            target_width_in=fixed_target_width,
+            target_height_in=fixed_target_height,
+            fan=fan_span,
+        )
+    else:
+        candidate_frames = _FRAME_CANDIDATES
+
     candidates = []
-    for bar_w, bar_h in _FRAME_CANDIDATES:
+    for bar_w, bar_h in candidate_frames:
         dpi_x = img_width_px / bar_w
         dpi_y = img_height_px / bar_h
 
@@ -231,6 +303,49 @@ def suggest_stretcher_frames(
              print_w, print_h, final_total)
         )
 
+    # If fan‑scan did not fill the quota, back‑fill with brute‑force frames
+    if use_fan and len(candidates) < max_suggestions:
+        for bar_w, bar_h in _FRAME_CANDIDATES:
+            if (bar_w, bar_h) in candidate_frames:
+                continue  # already evaluated
+            dpi_x = img_width_px / bar_w
+            dpi_y = img_height_px / bar_h
+            if not (min_dpi <= dpi_x <= max_dpi and min_dpi <= dpi_y <= max_dpi):
+                continue
+            pct_area_delta = (bar_w * bar_h - req_area) / req_area * 100
+
+            hp_w = _bar_price(bar_w, heavy=True)
+            hp_h = _bar_price(bar_h, heavy=True)
+            heavy_cost = round(2 * (hp_w + hp_h), 2) if hp_w and hp_h else None
+
+            sp_w = _bar_price(bar_w, heavy=False)
+            sp_h = _bar_price(bar_h, heavy=False)
+            std_cost = round(2 * (sp_w + sp_h), 2) if sp_w and sp_h else None
+
+            print_w = bar_w + 2 * PRINT_BORDER_PER_SIDE_IN
+            print_h = bar_h + 2 * PRINT_BORDER_PER_SIDE_IN
+            tbl, model_est, tbl_size = _print_prices(print_w, print_h)
+            print_cost_tbl = round(tbl + PRINT_SHIPPING_USD, 2) if tbl else None
+            print_cost_model = round(model_est + PRINT_SHIPPING_USD, 2)
+
+            bar_cost = None
+            if heavy_cost and std_cost:
+                bar_cost = min(heavy_cost, std_cost)
+            else:
+                bar_cost = heavy_cost if heavy_cost else std_cost
+
+            chosen_print = min(c for c in [print_cost_tbl, print_cost_model] if c)
+            final_total = round(bar_cost + chosen_print, 2) if bar_cost else None
+
+            candidates.append(
+                (bar_w, bar_h, dpi_x, dpi_y, pct_area_delta,
+                 heavy_cost, std_cost,
+                 print_cost_tbl, print_cost_model, tbl_size,
+                 print_w, print_h, final_total)
+            )
+            if len(candidates) >= max_suggestions:
+                break
+
     # Rank by (2) how closely the frame’s aspect ratio matches the image,
     # then (1) the existing area‑delta rule that favors slight wrap‑around.
     aspect_ratio = img_width_px / img_height_px
@@ -252,6 +367,7 @@ def run_demo(
     target_dpi: Optional[Number] = None,
     target_width_in: Optional[Number] = None,
     target_height_in: Optional[Number] = None,
+    use_fan: bool = False,
 ) -> None:
     """
     Convenience wrapper used by the __main__ block.
@@ -271,6 +387,7 @@ def run_demo(
         target_dpi=target_dpi,
         target_width_in=target_width_in,
         target_height_in=target_height_in,
+        use_fan=use_fan,
     )
 
     # ---- Friendly header -------------------------------------------------
@@ -351,4 +468,5 @@ if __name__ == "__main__":
         target_dpi=None,
         target_width_in=32,
         target_height_in=None,
+        use_fan=True,   # ← try the new fan‑scan ranking
     )
