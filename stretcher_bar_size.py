@@ -122,7 +122,7 @@ def suggest_stretcher_frames(
     target_width_in: Optional[Number] = None,
     target_height_in: Optional[Number] = None,
     tolerance_pct: float = 15.0,
-    max_suggestions: int = 8,
+    max_suggestions: int = 12,
 ) -> List[Tuple[
         int, int, float, float, float,         # bars, dpi, Δ
         Optional[float], Optional[float],      # heavy, std bar $
@@ -231,15 +231,15 @@ def suggest_stretcher_frames(
              print_w, print_h, final_total)
         )
 
-    # Rank by (1) how closely the frame’s aspect ratio matches the image,
-    # then (2) the existing area‑delta rule that favors slight wrap‑around.
+    # Rank by (2) how closely the frame’s aspect ratio matches the image,
+    # then (1) the existing area‑delta rule that favors slight wrap‑around.
     aspect_ratio = img_width_px / img_height_px
     candidates.sort(
-        key=lambda x: (
-            abs((x[0] / x[1]) - aspect_ratio),           # aspect‑ratio distance
-            (abs(x[4]) / 3) if x[4] < 0 else abs(x[4])   # area delta (existing weighting)
-        )
+    key=lambda x: (
+        (abs(x[4]) / 3) if x[4] < 0 else abs(x[4]),   # 1st: area
+        abs((x[0] / x[1]) - aspect_ratio)             # 2nd: aspect
     )
+)
     return candidates[:max_suggestions]
 
 
@@ -287,34 +287,54 @@ def run_demo(
     print("Top stretcher‑bar suggestions:")
 
     # ---- Pretty‑print each candidate ------------------------------------
-    for (w, h, dpi_x, dpi_y, pct,
+    # First compute the “nominal” image width/height at the chosen DPI
+    if target_dpi is not None:
+        eff_dpi = float(target_dpi)
+    elif target_width_in is not None:
+        eff_dpi = img_width_px / float(target_width_in)
+    else:
+        eff_dpi = img_height_px / float(target_height_in)
+
+    req_w_in = img_width_px / eff_dpi
+    req_h_in = img_height_px / eff_dpi
+
+    for (w, h, dpi_x, dpi_y, pct_area,
          heavy_cost, std_cost,
          print_tbl, print_model, tbl_size,
          prn_w, prn_h, final_total) in suggestions:
 
-        delta_label = "wrap" if pct < 0 else "Δarea"
+        # Per‑axis deltas (positive → image larger than bars; negative → wrap)
+        pct_w = (w - req_w_in) / req_w_in * 100
+        pct_h = (h - req_h_in) / req_h_in * 100
 
-        parts = []
-        if heavy_cost is not None:
-            parts.append(f"Heavy ${heavy_cost:.2f}")
-        if std_cost is not None:
-            parts.append(f"Std ${std_cost:.2f}")
+        # ---- Bar pricing strings --------------------------------------
+        heavy_str = f"${heavy_cost:.2f}" if heavy_cost is not None else "NA"
+        std_str   = f"${std_cost:.2f}"   if std_cost   is not None else "NA"
 
+        # ---- Printing strings ----------------------------------------
         if print_tbl is not None:
-            parts.append(f"Print tbl ${print_tbl:.2f} ({tbl_size[0]}×{tbl_size[1]})")
+            tbl_str = f"${print_tbl:.2f}  (≤{tbl_size[0]}×{tbl_size[1]}\")"
         else:
-            parts.append("Print tbl —")
+            tbl_str = "—"
 
-        parts.append(f"Print mdl ${print_model:.2f} ({prn_w:.1f}\"×{prn_h:.1f}\")")
+        mdl_str = f"${print_model:.2f}  ({prn_w:.1f}\"×{prn_h:.1f}\")"
 
-        price_info = " | ".join(parts)
-        tot_info   = f" | Final ≈ ${final_total:.2f}" if final_total is not None else ""
+        # ---- Output block --------------------------------------------
+        print(f"{w}\"×{h}\"")
+        print(f"  DPIₓ≈{dpi_x:.0f}, DPIᵧ≈{dpi_y:.0f}")
+        # Explain which side is larger: negative → image larger (wrap), positive → bars larger
+        area_note = "wrap (image larger)" if pct_area < 0 else "gap (bars larger)"
+        w_note    = "image wider" if pct_w < 0 else "bars wider"
+        h_note    = "image taller" if pct_h < 0 else "bars taller"
 
-        print(
-            f"  •  {w}\"×{h}\" → "
-            f"DPIₓ≈{dpi_x:.0f}, DPIᵧ≈{dpi_y:.0f} "
-            f"({delta_label} {abs(pct):.1f} %) | {price_info}{tot_info}"
-        )
+        print(f"  Δarea {pct_area:+.1f}%  [{area_note}]")
+        print(f"     ΔW {pct_w:+.1f}%  ({w_note})   ΔH {pct_h:+.1f}%  ({h_note})")
+        print(f"  Bars       Heavy: {heavy_str}   |   Standard: {std_str}")
+        print(f"  Print tbl: {tbl_str}")
+        print(f"  Print mdl: {mdl_str}")
+        if final_total is not None:
+            print(f"  Estimated total: ${final_total:.2f}")
+        print()  # blank line between candidates
 
 
 if __name__ == "__main__":
@@ -329,6 +349,6 @@ if __name__ == "__main__":
         example_px_width,
         example_px_height,
         target_dpi=None,
-        target_width_in=None,
-        target_height_in=39,
+        target_width_in=32,
+        target_height_in=None,
     )
