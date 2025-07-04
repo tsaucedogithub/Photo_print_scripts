@@ -142,27 +142,38 @@ def _fan_candidates(
     *,
     target_width_in: Optional[Number] = None,
     target_height_in: Optional[Number] = None,
+    target_dpi: Optional[Number] = None,
     fan: int = 2,
 ) -> List[Tuple[int, int]]:
     """
     Generate a small neighbourhood (“fan”) of (w,h) bar sizes that preserve
     the image’s aspect ratio as closely as possible around the *fixed* side
     specified by the user.
+    If only `target_dpi` is provided, the function centers the fan on the
+    *ideal* physical width and height implied by that DPI.
     """
     ar = img_w_px / img_h_px
 
-    if target_width_in is not None:
-        w_fixed = int(round(target_width_in))
-        h_ideal = w_fixed / ar
-        heights = _nearest_sizes(h_ideal, fan)
-        widths  = [w_fixed]
-    elif target_height_in is not None:
-        h_fixed = int(round(target_height_in))
-        w_ideal = h_fixed * ar
+    if target_width_in is not None or target_height_in is not None:
+        # --- One physical side is fixed --------------------------------
+        if target_width_in is not None:
+            w_fixed = int(round(target_width_in))
+            h_ideal = w_fixed / ar
+            heights = _nearest_sizes(h_ideal, fan)
+            widths  = [w_fixed]
+        else:  # fixed height
+            h_fixed = int(round(target_height_in))
+            w_ideal = h_fixed * ar
+            widths  = _nearest_sizes(w_ideal, fan)
+            heights = [h_fixed]
+    elif target_dpi is not None:
+        # --- Fixed DPI: build neighbourhood around BOTH ideal dimensions
+        w_ideal = img_w_px / target_dpi
+        h_ideal = img_h_px / target_dpi
         widths  = _nearest_sizes(w_ideal, fan)
-        heights = [h_fixed]
+        heights = _nearest_sizes(h_ideal, fan)
     else:
-        raise ValueError("fan‑scan requires either target_width_in or target_height_in")
+        raise ValueError("fan‑scan requires target_width_in, target_height_in, or target_dpi")
 
     # Cartesian product of the candidate lists
     return [(w, h) for w in widths for h in heights]
@@ -257,6 +268,7 @@ def suggest_stretcher_frames(
             img_height_px,
             target_width_in=fixed_target_width,
             target_height_in=fixed_target_height,
+            target_dpi=target_dpi,
             fan=fan_span,
         )
     else:
@@ -470,15 +482,15 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Simple CLI demo: edit the values below and re‑run the script.
     # ------------------------------------------------------------------
-    example_px_width  = 42558
-    example_px_height = 31589
+    example_px_width  = 3002
+    example_px_height = 3731
 
     # Exactly ONE of the following three targets should be non‑None.
     run_demo(
         example_px_width,
         example_px_height,
-        target_dpi=None,
-        target_width_in=98,     # ← fixed side
+        target_dpi=100,
+        target_width_in=None,     # ← fixed side
         target_height_in=None,
         use_fan=True,           # ← fan‑scan enabled
     )
