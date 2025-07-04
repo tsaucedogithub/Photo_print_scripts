@@ -38,7 +38,19 @@ HEAVY_PRICES: Dict[int, float] = {
     30: 12.69, 31: 13.13, 32: 13.97, 33: 14.24, 34: 14.93, 35: 15.05,
     36: 15.17, 37: 16.25, 38: 16.60, 39: 17.14, 40: 18.14, 41: 18.35,
     42: 18.37, 43: 19.29, 44: 17.96, 45: 19.77, 46: 19.79, 48: 20.85,
-    50: 21.35, 52: 22.27, 54: 22.74, 56: 23.59, 60: 25.24
+    50: 21.35, 52: 22.27, 54: 22.74, 56: 23.59, 60: 25.24,
+    # Updated July 2025 Blick sale prices, keys > 60:
+    61: 25.24, 62: 25.24, 63: 25.30, 64: 25.24,
+    65: 25.93, 66: 25.95, 67: 25.93, 68: 25.95,
+    69: 27.72, 70: 27.72, 71: 27.72, 72: 27.72,
+    73: 30.39, 74: 30.47, 75: 30.39, 76: 30.47,
+    77: 31.01, 78: 31.62, 79: 31.68,
+    80: 34.25, 81: 34.25,
+    82: 36.83, 83: 36.82, 84: 36.83, 85: 36.82,
+    86: 44.45, 88: 44.45,
+    90: 50.59, 92: 50.59,
+    94: 53.94, 96: 53.94,
+    98: 57.68,
 }
 STANDARD_PRICES: Dict[int, float] = {
     8: 1.49, 9: 1.48, 10: 1.62, 11: 3.35, 12: 1.95, 13: 2.15, 14: 2.36,
@@ -169,7 +181,7 @@ def suggest_stretcher_frames(
     target_width_in: Optional[Number] = None,
     target_height_in: Optional[Number] = None,
     tolerance_pct: float = 15.0,
-    max_suggestions: int = 12,
+    max_suggestions: int = 16,
     use_fan: bool = False,
     fan_span: int = 2,
 ) -> List[Tuple[
@@ -458,15 +470,15 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Simple CLI demo: edit the values below and re‑run the script.
     # ------------------------------------------------------------------
-    example_px_width  = 3305
-    example_px_height = 4096
+    example_px_width  = 42558
+    example_px_height = 31589
 
     # Exactly ONE of the following three targets should be non‑None.
     run_demo(
         example_px_width,
         example_px_height,
         target_dpi=None,
-        target_width_in=32,
+        target_width_in=98,     # ← fixed side
         target_height_in=None,
-        use_fan=True,   # ← try the new fan‑scan ranking
+        use_fan=True,           # ← fan‑scan enabled
     )
