@@ -5,6 +5,7 @@ avoiding repeated recomputation of static candidate frames.
 from typing import List, Tuple
 from typing import Dict, Optional
 from numbers import Number
+import statistics
 
 
 def get_stretcher_sizes(
@@ -48,6 +49,64 @@ STANDARD_PRICES: Dict[int, float] = {
     50: 7.53, 52: 7.72, 54: 7.74, 60: 8.11
 }
 
+PRINT_BORDER_PER_SIDE_IN: float = 1.5  # user prefers ~3" total wrap
+PRINT_SHIPPING_USD: float = 10.0
+
+# keyed as (long_side, short_side) — orientation‑agnostic
+PRINT_PRICES: Dict[Tuple[int, int], float] = {
+    (60, 57): 106,
+    (60, 50): 93,
+    (60, 40): 75,
+    (50, 40): 63,
+    (40, 40): 50,
+    (40, 30): 38,
+    (40, 20): 25,
+    (35, 23): 25,
+    (30, 20): 19,
+    (20, 20): 13,
+    (20, 10):  7,
+    (10, 10):  3,
+}
+
+# Flatten PRINT_PRICES into (area, price) samples for a crude linear model
+_PRINT_SAMPLES = [
+    (long * short, price)
+    for (long, short), price in PRINT_PRICES.items()
+]
+_area_samples, _price_samples = zip(*_PRINT_SAMPLES)
+_mean_area  = statistics.mean(_area_samples)
+_mean_price = statistics.mean(_price_samples)
+# simple least‑squares slope & intercept for price ≈ intercept + slope * area
+_slope = sum((a - _mean_area) * (p - _mean_price) for a, p in _PRINT_SAMPLES) / \
+         sum((a - _mean_area) ** 2 for a in _area_samples)
+_intercept = _mean_price - _slope * _mean_area
+
+def _print_prices(width_in: float, height_in: float) -> Tuple[
+        Optional[float],   # table price  (None if no table size fits)
+        float,             # model price  (always available)
+        Tuple[int, int]    # table size used or (0,0)
+]:
+    """Return (table_price, model_price, chosen_table_size)."""
+    long_dim, short_dim = sorted((width_in, height_in), reverse=True)
+
+    # ---- TABLE LOOK-UP -------------------------------------------------
+    fits = [
+        (long_tbl, short_tbl, price)
+        for (long_tbl, short_tbl), price in PRINT_PRICES.items()
+        if long_dim <= long_tbl and short_dim <= short_tbl
+    ]
+    if fits:
+        long_tbl, short_tbl, tbl_price = min(fits, key=lambda t: t[2])
+        tbl_size = (long_tbl, short_tbl)
+    else:
+        tbl_price = None
+        tbl_size  = (0, 0)
+
+    # ---- LINEAR MODEL --------------------------------------------------
+    model_price = round(_intercept + _slope * (width_in * height_in), 2)
+
+    return tbl_price, model_price, tbl_size
+
 
 def _bar_price(length: int, heavy: bool) -> Optional[float]:
     table = HEAVY_PRICES if heavy else STANDARD_PRICES
@@ -64,7 +123,13 @@ def suggest_stretcher_frames(
     target_height_in: Optional[Number] = None,
     tolerance_pct: float = 15.0,
     max_suggestions: int = 8,
-) -> List[Tuple[int, int, float, float, float, Optional[float], Optional[float]]]:
+) -> List[Tuple[
+        int, int, float, float, float,         # bars, dpi, Δ
+        Optional[float], Optional[float],      # heavy, std bar $
+        Optional[float], float, Tuple[int,int],# tbl$, model$, tbl_size
+        float, float,                          # print_w, print_h
+        Optional[float]                        # final_total
+]]:
     """
     Suggest up to ``max_suggestions`` stretcher‑bar sizes that fit the image.
     You can specify EITHER:
@@ -79,9 +144,15 @@ def suggest_stretcher_frames(
 
     Returns:
         List of tuples:
-            (frame_w_in, frame_h_in, dpi_x, dpi_y, pct_area_delta, heavy_cost_usd, standard_cost_usd)
+            (frame_w_in, frame_h_in, dpi_x, dpi_y, pct_area_delta,
+             heavy_cost_usd, standard_cost_usd,
+             print_cost_tbl_usd (incl ship), print_cost_model_usd (incl ship), tbl_size,
+             print_w_in, print_h_in,
+             final_total_usd — cheapest bar + cheapest print (incl ship)
+            )
         sorted ascending by absolute pct_area_delta.
-        The last two fields are the total retail cost in USD for Heavy‑Duty and Standard bars, or None if unavailable.
+        The last three fields are the total retail cost in USD for Heavy‑Duty and Standard bars, or None if unavailable,
+        and the total cost (print + flat shipping).
     """
     # ---- Input validation & implied DPI -------------------------------
     dpi_inputs = [target_dpi is not None, target_width_in is not None, target_height_in is not None]
@@ -132,8 +203,32 @@ def suggest_stretcher_frames(
         if sp_w is not None and sp_h is not None:
             std_cost = round(2 * (sp_w + sp_h), 2)
 
+        # ---- Printing estimates ---------------------------------------
+        print_w = bar_w + 2 * PRINT_BORDER_PER_SIDE_IN
+        print_h = bar_h + 2 * PRINT_BORDER_PER_SIDE_IN
+        tbl, model_est, tbl_size = _print_prices(print_w, print_h)
+
+        if tbl is not None:
+            print_cost_tbl    = round(tbl    + PRINT_SHIPPING_USD, 2)
+        else:
+            print_cost_tbl    = None
+        print_cost_model = round(model_est + PRINT_SHIPPING_USD, 2)
+
+        # ---- Final total (cheapest bar + cheapest print) --------------
+        bar_cost = None
+        if heavy_cost is not None and std_cost is not None:
+            bar_cost = min(heavy_cost, std_cost)
+        else:
+            bar_cost = heavy_cost if heavy_cost is not None else std_cost
+
+        chosen_print = min(c for c in [print_cost_tbl, print_cost_model] if c is not None)
+        final_total = round(bar_cost + chosen_print, 2) if bar_cost is not None else None
+
         candidates.append(
-            (bar_w, bar_h, dpi_x, dpi_y, pct_area_delta, heavy_cost, std_cost)
+            (bar_w, bar_h, dpi_x, dpi_y, pct_area_delta,
+             heavy_cost, std_cost,
+             print_cost_tbl, print_cost_model, tbl_size,
+             print_w, print_h, final_total)
         )
 
     # Prefer wrap‑around (negative Δ) by a 3:1 ratio:
@@ -144,29 +239,37 @@ def suggest_stretcher_frames(
     return candidates[:max_suggestions]
 
 
-if __name__ == "__main__":
-    """
-    Quick demo — fill **exactly one** of the three target variables below
-    and leave the other two as None.
-    """
-    example_px_width  = 3549
-    example_px_height = 4096
 
-    # ---- CHOOSE ONE TARGET ------------------------------------------------
-    target_dpi       = None   # e.g. 180
-    target_width_in  = 25     # e.g. 20 for 20‑inch width
-    target_height_in = None   # e.g. 15 for 15‑inch height
-    # ----------------------------------------------------------------------
+# ---- Demo helper -----------------------------------------------------------
+def run_demo(
+    img_width_px: int,
+    img_height_px: int,
+    *,
+    target_dpi: Optional[Number] = None,
+    target_width_in: Optional[Number] = None,
+    target_height_in: Optional[Number] = None,
+) -> None:
+    """
+    Convenience wrapper used by the __main__ block.
 
+    Responsibilities:
+    1. Validate that exactly one of target_dpi / target_width_in / target_height_in
+       is provided (we simply re‑use the check inside suggest_stretcher_frames).
+    2. Delegate to suggest_stretcher_frames to obtain ranked suggestions.
+    3. Pretty‑print the suggestions in a compact, human‑readable format.
+
+    The printing format is kept identical to the previous inline demo so that
+    unit tests or downstream scripts that scrape stdout remain unaffected.
+    """
     suggestions = suggest_stretcher_frames(
-        example_px_width,
-        example_px_height,
+        img_width_px,
+        img_height_px,
         target_dpi=target_dpi,
         target_width_in=target_width_in,
         target_height_in=target_height_in,
     )
 
-    # ---- Friendly header ---------------------------------------------------
+    # ---- Friendly header -------------------------------------------------
     if target_dpi is not None:
         target_desc = f"{target_dpi} DPI (±15 %)"
     elif target_width_in is not None:
@@ -175,23 +278,53 @@ if __name__ == "__main__":
         target_desc = f'{target_height_in}" tall'
 
     print(
-        f"Image: {example_px_width:,} × {example_px_height:,} px  |  Target: {target_desc}"
+        f"Image: {img_width_px:,} × {img_height_px:,} px  |  Target: {target_desc}"
     )
     print("Top stretcher‑bar suggestions:")
 
-    for w, h, dpi_x, dpi_y, pct, heavy_cost, std_cost in suggestions:
+    # ---- Pretty‑print each candidate ------------------------------------
+    for (w, h, dpi_x, dpi_y, pct,
+         heavy_cost, std_cost,
+         print_tbl, print_model, tbl_size,
+         prn_w, prn_h, final_total) in suggestions:
+
         delta_label = "wrap" if pct < 0 else "Δarea"
-        price_parts = []
+
+        parts = []
         if heavy_cost is not None:
-            price_parts.append(f"Heavy ${heavy_cost:.2f}")
+            parts.append(f"Heavy ${heavy_cost:.2f}")
         if std_cost is not None:
-            price_parts.append(f"Std ${std_cost:.2f}")
-        price_info = " | ".join(price_parts)
-        if price_info:
-            price_info = " | " + price_info
+            parts.append(f"Std ${std_cost:.2f}")
+
+        if print_tbl is not None:
+            parts.append(f"Print tbl ${print_tbl:.2f} ({tbl_size[0]}×{tbl_size[1]})")
+        else:
+            parts.append("Print tbl —")
+
+        parts.append(f"Print mdl ${print_model:.2f} ({prn_w:.1f}\"×{prn_h:.1f}\")")
+
+        price_info = " | ".join(parts)
+        tot_info   = f" | Final ≈ ${final_total:.2f}" if final_total is not None else ""
 
         print(
-            f"  •  {w}\" × {h}\"  →  "
-            f"DPIₓ ≈ {dpi_x:.0f}, DPIᵧ ≈ {dpi_y:.0f}  "
-            f"({delta_label} {abs(pct):.1f} %){price_info}"
+            f"  •  {w}\"×{h}\" → "
+            f"DPIₓ≈{dpi_x:.0f}, DPIᵧ≈{dpi_y:.0f} "
+            f"({delta_label} {abs(pct):.1f} %) | {price_info}{tot_info}"
         )
+
+
+if __name__ == "__main__":
+    # ------------------------------------------------------------------
+    # Simple CLI demo: edit the values below and re‑run the script.
+    # ------------------------------------------------------------------
+    example_px_width  = 3549
+    example_px_height = 4096
+
+    # Exactly ONE of the following three targets should be non‑None.
+    run_demo(
+        example_px_width,
+        example_px_height,
+        target_dpi=None,
+        target_width_in=25,
+        target_height_in=None,
+    )
