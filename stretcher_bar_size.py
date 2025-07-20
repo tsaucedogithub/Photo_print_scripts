@@ -482,14 +482,14 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # Simple CLI demo: edit the values below and re‑run the script.
     # ------------------------------------------------------------------
-    example_px_width  = 3002
-    example_px_height = 3731
+    example_px_width  = 11400
+    example_px_height = 8700
 
     # Exactly ONE of the following three targets should be non‑None.
     run_demo(
         example_px_width,
         example_px_height,
-        target_dpi=100,
+        target_dpi=300,
         target_width_in=None,     # ← fixed side
         target_height_in=None,
         use_fan=True,           # ← fan‑scan enabled
